@@ -151,7 +151,10 @@ jobs:
         # the project's own entries point at nonexistent ..\..\libs dirs.
         # System libs are over-listed on purpose: unreferenced ones are ignored,
         # a missing one would be LNK2019. Static CRT (/MT default) matches triplet.
-        run: msbuild OpenMarketClient.sln /p:Configuration=Release /p:Platform=x64 /p:VcpkgEnabled=false /p:AdditionalIncludeDirectories="$env:GITHUB_WORKSPACE\vsproject\vcpkg_installed\x64-windows-static\include" /p:AdditionalLibraryDirectories="$env:GITHUB_WORKSPACE\vsproject\vcpkg_installed\x64-windows-static\lib" /p:AdditionalDependencies="Ws2_32.lib;Wldap32.lib;Crypt32.lib;Secur32.lib;Advapi32.lib;Normaliz.lib;wolfssl.lib;libcurl.lib;zlib.lib" /m /v:m
+        # NB: quotes around ;-separated values are backtick-escaped (`") so that
+        # pwsh forwards them to native msbuild intact; bare "..." gets stripped
+        # and MSBuild then chokes on the second item (MSB1006).
+        run: msbuild OpenMarketClient.sln /p:Configuration=Release /p:Platform=x64 /p:VcpkgEnabled=false /p:AdditionalIncludeDirectories="$env:GITHUB_WORKSPACE\vsproject\vcpkg_installed\x64-windows-static\include" /p:AdditionalLibraryDirectories="$env:GITHUB_WORKSPACE\vsproject\vcpkg_installed\x64-windows-static\lib" /p:AdditionalDependencies=`"Ws2_32.lib;Wldap32.lib;Crypt32.lib;Secur32.lib;Advapi32.lib;Normaliz.lib;wolfssl.lib;libcurl.lib;zlib.lib`" /m /v:m
 
       - name: Smoke test (--help)
         run: .\build\x64\Release\OpenMarketClient.exe --help
