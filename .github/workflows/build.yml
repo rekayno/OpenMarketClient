@@ -64,6 +64,9 @@ jobs:
           }
           EOF
           cat vcpkg.json
+          # MSBuild manifest lookup expects vcpkg.json next to the .vcxproj,
+          # so drop an identical copy into vsproject/ as well.
+          cp vcpkg.json vsproject/vcpkg.json
 
       - name: Setup vcpkg (restore deps from generated vcpkg.json)
         uses: lukka/run-vcpkg@v11.6
@@ -100,7 +103,7 @@ jobs:
         uses: microsoft/setup-msbuild@v3.0.0
 
       - name: Build Release|x64
-        run: msbuild OpenMarketClient.sln /p:Configuration=Release /p:Platform=x64 /p:VcpkgEnabled=true /m /v:m
+        run: msbuild OpenMarketClient.sln /p:Configuration=Release /p:Platform=x64 /p:VcpkgEnabled=true /p:VcpkgEnableManifest=true /p:VcpkgTriplet=x64-windows-static /m /v:m
 
       - name: Smoke test (--help)
         run: .\build\x64\Release\OpenMarketClient.exe --help
@@ -232,6 +235,8 @@ jobs:
           arch: armv7
           distro: ubuntu22.04
           githubToken: ${{ github.token }}
+          # Silences the "image platform (linux/arm/v7) does not match host" warning.
+          dockerRunArgs: '--platform linux/arm/v7'
           install: |
             apt-get update -q -y
             apt-get install -q -y g++ make libcurl4-openssl-dev libwolfssl-dev rapidjson-dev zlib1g-dev file
