@@ -1,0 +1,279 @@
+name: Build
+
+# NOTE: this is one of only 2 files added to the repo for CI.
+# All code changes (including PR #23) are applied on-the-fly
+# inside this workflow, so src/Makefile/vcxproj stay pristine.
+# Second file: .github/workflows/merge-pr.yml (persistent PR merge).
+
+on:
+  push:
+    branches: [ master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------- Windows (MSVC, x64 Release) ----------------
+  build-windows-x64:
+    name: Windows x64
+    runs-on: windows-2022
+    env:
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static
+      VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+    steps:
+      - name: Checkout (full history, needed for on-the-fly PR merge)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply PR #23 on-the-fly (CanSell steam_web_api_key fix)
+        shell: bash
+        run: |
+          set -e
+          # Fork-safe: PR #23 lives on soyware/OpenMarketClient upstream.
+          # `origin` has no pull/23 ref on forks, so fall back to explicit upstream URL.
+          git fetch origin pull/23/head:pr-23 2>/dev/null || git fetch https://github.com/soyware/OpenMarketClient.git pull/23/head:pr-23
+          if git merge-base --is-ancestor pr-23 HEAD; then
+            echo "PR #23 already in HEAD, skipping merge"
+          else
+            git -c user.name="github-actions" -c user.email="github-actions@github.com" merge --no-ff pr-23 -m "CI: merge PR #23 on-the-fly"
+          fi
+          git log --oneline -3
+          git diff HEAD~1 --stat || true
+
+      - name: Generate vcpkg.json on-the-fly (not committed)
+        shell: bash
+        run: |
+          cat > vcpkg.json <<'EOF'
+          {
+            "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+            "name": "openmarketclient",
+            "version-string": "0.4.4",
+            "description": "Unofficial cross-platform console client for market.csgo.com / market.dota2.net / tf2.tm / rust.tm / gifts.tm",
+            "dependencies": [
+              "curl",
+              "rapidjson",
+              "wolfssl",
+              "zlib"
+            ]
+          }
+          EOF
+          cat vcpkg.json
+
+      - name: Setup vcpkg (restore deps from generated vcpkg.json)
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgJsonGlob: 'vcpkg.json'
+
+      - name: Patch src/Precompiled.h on-the-fly (vcpkg wolfssl uses options.h)
+        shell: python
+        run: |
+          import pathlib
+          p = pathlib.Path("src/Precompiled.h")
+          s = p.read_text(encoding="utf-8")
+          if "wolfssl/options.h" in s and "__has_include" in s:
+              print("Precompiled.h already patched, skipping")
+          else:
+              old = "#define WOLFSSL_LIB\n#include <IDE/WIN/user_settings.h>\n#undef WOLFSSL_LIB"
+              new = ("// wolfSSL config (patched on-the-fly by CI):\n"
+                     "// - classic local build (../../libs/wolfssl): uses IDE/WIN/user_settings.h\n"
+                     "// - vcpkg / CMake build (CI): provides wolfssl/options.h\n"
+                     "#if defined(__has_include) && __has_include(<wolfssl/options.h>)\n"
+                     "#include <wolfssl/options.h>\n"
+                     "#else\n"
+                     "#define WOLFSSL_LIB\n"
+                     "#include <IDE/WIN/user_settings.h>\n"
+                     "#undef WOLFSSL_LIB\n"
+                     "#endif")
+              assert old in s, "Precompiled.h pattern not found, update CI patch"
+              p.write_text(s.replace(old, new), encoding="utf-8")
+              print("Precompiled.h patched")
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build Release|x64
+        run: msbuild OpenMarketClient.sln /p:Configuration=Release /p:Platform=x64 /p:VcpkgEnabled=true /m /v:m
+
+      - name: Smoke test (--help)
+        run: .\build\x64\Release\OpenMarketClient.exe --help
+        continue-on-error: true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenMarketClient-windows-x64
+          path: build/x64/Release/OpenMarketClient.exe
+          if-no-files-found: error
+
+  # ---------------- Linux amd64 (native) ----------------
+  build-linux-amd64:
+    name: Linux amd64
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout (full history, needed for on-the-fly PR merge)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply PR #23 on-the-fly (CanSell steam_web_api_key fix)
+        run: |
+          set -e
+          # Fork-safe: PR #23 lives on soyware/OpenMarketClient upstream.
+          # `origin` has no pull/23 ref on forks, so fall back to explicit upstream URL.
+          git fetch origin pull/23/head:pr-23 2>/dev/null || git fetch https://github.com/soyware/OpenMarketClient.git pull/23/head:pr-23
+          if git merge-base --is-ancestor pr-23 HEAD; then
+            echo "PR #23 already in HEAD, skipping merge"
+          else
+            git -c user.name="github-actions" -c user.email="github-actions@github.com" merge --no-ff pr-23 -m "CI: merge PR #23 on-the-fly"
+          fi
+          git log --oneline -3
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ make libcurl4-openssl-dev libwolfssl-dev rapidjson-dev zlib1g-dev file
+
+      - name: Build
+        run: |
+          make -j$(nproc) DIR_OUT=build/linux-amd64
+          file build/linux-amd64/OpenMarketClient
+          ldd build/linux-amd64/OpenMarketClient || true
+
+      - name: Smoke test (--help)
+        run: ./build/linux-amd64/OpenMarketClient --help || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenMarketClient-linux-amd64
+          path: build/linux-amd64/OpenMarketClient
+          if-no-files-found: error
+
+  # ---------------- Linux arm64 / v8 (native ARM runner) ----------------
+  build-linux-arm64:
+    name: Linux arm64 (v8)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout (full history, needed for on-the-fly PR merge)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply PR #23 on-the-fly (CanSell steam_web_api_key fix)
+        run: |
+          set -e
+          # Fork-safe: PR #23 lives on soyware/OpenMarketClient upstream.
+          # `origin` has no pull/23 ref on forks, so fall back to explicit upstream URL.
+          git fetch origin pull/23/head:pr-23 2>/dev/null || git fetch https://github.com/soyware/OpenMarketClient.git pull/23/head:pr-23
+          if git merge-base --is-ancestor pr-23 HEAD; then
+            echo "PR #23 already in HEAD, skipping merge"
+          else
+            git -c user.name="github-actions" -c user.email="github-actions@github.com" merge --no-ff pr-23 -m "CI: merge PR #23 on-the-fly"
+          fi
+          git log --oneline -3
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ make libcurl4-openssl-dev libwolfssl-dev rapidjson-dev zlib1g-dev file
+
+      - name: Build
+        run: |
+          make -j$(nproc) DIR_OUT=build/linux-arm64
+          file build/linux-arm64/OpenMarketClient
+          ldd build/linux-arm64/OpenMarketClient || true
+
+      - name: Smoke test (--help)
+        run: ./build/linux-arm64/OpenMarketClient --help || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenMarketClient-linux-arm64
+          path: build/linux-arm64/OpenMarketClient
+          if-no-files-found: error
+
+  # ---------------- Linux armv7 (32-bit, emulated via QEMU) ----------------
+  # GitHub has no native armv7 runners, so build inside arm32v7/ubuntu container.
+  # PR #23 is merged on the host before entering the container (workspace is shared).
+  build-linux-armv7:
+    name: Linux armv7
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout (full history, needed for on-the-fly PR merge)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply PR #23 on-the-fly (CanSell steam_web_api_key fix)
+        run: |
+          set -e
+          # Fork-safe: PR #23 lives on soyware/OpenMarketClient upstream.
+          # `origin` has no pull/23 ref on forks, so fall back to explicit upstream URL.
+          git fetch origin pull/23/head:pr-23 2>/dev/null || git fetch https://github.com/soyware/OpenMarketClient.git pull/23/head:pr-23
+          if git merge-base --is-ancestor pr-23 HEAD; then
+            echo "PR #23 already in HEAD, skipping merge"
+          else
+            git -c user.name="github-actions" -c user.email="github-actions@github.com" merge --no-ff pr-23 -m "CI: merge PR #23 on-the-fly"
+          fi
+          git log --oneline -3
+
+      - name: Build in armv7 container (QEMU)
+        uses: uraimo/run-on-arch-action@v2
+        with:
+          arch: armv7
+          distro: ubuntu22.04
+          githubToken: ${{ github.token }}
+          install: |
+            apt-get update -q -y
+            apt-get install -q -y g++ make libcurl4-openssl-dev libwolfssl-dev rapidjson-dev zlib1g-dev file
+          run: |
+            set -e
+            make -j$(nproc) DIR_OUT=build/linux-armv7
+            file build/linux-armv7/OpenMarketClient
+            ldd build/linux-armv7/OpenMarketClient || true
+            ./build/linux-armv7/OpenMarketClient --help || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenMarketClient-linux-armv7
+          path: build/linux-armv7/OpenMarketClient
+          if-no-files-found: error
+
+  # ---------------- Release (on tag v*) ----------------
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-windows-x64, build-linux-amd64, build-linux-arm64, build-linux-armv7]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Prepare release files
+        run: |
+          set -e
+          ls -R dist
+          mkdir -p release
+          cp dist/OpenMarketClient-windows-x64/OpenMarketClient.exe release/OpenMarketClient-windows-x64.exe
+          cp dist/OpenMarketClient-linux-amd64/OpenMarketClient release/OpenMarketClient-linux-amd64
+          cp dist/OpenMarketClient-linux-arm64/OpenMarketClient release/OpenMarketClient-linux-arm64
+          cp dist/OpenMarketClient-linux-armv7/OpenMarketClient release/OpenMarketClient-linux-armv7
+          chmod +x release/OpenMarketClient-linux-*
+          ls -lh release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
