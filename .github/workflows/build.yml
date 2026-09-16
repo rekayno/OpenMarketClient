@@ -26,7 +26,7 @@ jobs:
       VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
     steps:
       - name: Checkout (full history, needed for on-the-fly PR merge)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.1.0
         with:
           fetch-depth: 0
 
@@ -53,6 +53,7 @@ jobs:
             "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
             "name": "openmarketclient",
             "version-string": "0.4.4",
+            "builtin-baseline": "1577f17ee57f42a0ef6d75bbb82cb37d0b76d7e8",
             "description": "Unofficial cross-platform console client for market.csgo.com / market.dota2.net / tf2.tm / rust.tm / gifts.tm",
             "dependencies": [
               "curl",
@@ -65,9 +66,11 @@ jobs:
           cat vcpkg.json
 
       - name: Setup vcpkg (restore deps from generated vcpkg.json)
-        uses: lukka/run-vcpkg@v11
+        uses: lukka/run-vcpkg@v11.6
         with:
           vcpkgJsonGlob: 'vcpkg.json'
+          # Pinned vcpkg commit, must match builtin-baseline in generated vcpkg.json.
+          vcpkgGitCommitId: '1577f17ee57f42a0ef6d75bbb82cb37d0b76d7e8'
 
       - name: Patch src/Precompiled.h on-the-fly (vcpkg wolfssl uses options.h)
         shell: python
@@ -94,7 +97,7 @@ jobs:
               print("Precompiled.h patched")
 
       - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
+        uses: microsoft/setup-msbuild@v3.0.0
 
       - name: Build Release|x64
         run: msbuild OpenMarketClient.sln /p:Configuration=Release /p:Platform=x64 /p:VcpkgEnabled=true /m /v:m
@@ -104,7 +107,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6.0.0
         with:
           name: OpenMarketClient-windows-x64
           path: build/x64/Release/OpenMarketClient.exe
@@ -116,7 +119,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout (full history, needed for on-the-fly PR merge)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.1.0
         with:
           fetch-depth: 0
 
@@ -148,7 +151,7 @@ jobs:
         run: ./build/linux-amd64/OpenMarketClient --help || true
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6.0.0
         with:
           name: OpenMarketClient-linux-amd64
           path: build/linux-amd64/OpenMarketClient
@@ -160,7 +163,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - name: Checkout (full history, needed for on-the-fly PR merge)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.1.0
         with:
           fetch-depth: 0
 
@@ -192,7 +195,7 @@ jobs:
         run: ./build/linux-arm64/OpenMarketClient --help || true
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6.0.0
         with:
           name: OpenMarketClient-linux-arm64
           path: build/linux-arm64/OpenMarketClient
@@ -206,7 +209,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout (full history, needed for on-the-fly PR merge)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.1.0
         with:
           fetch-depth: 0
 
@@ -224,7 +227,7 @@ jobs:
           git log --oneline -3
 
       - name: Build in armv7 container (QEMU)
-        uses: uraimo/run-on-arch-action@v2
+        uses: uraimo/run-on-arch-action@v3.2.0
         with:
           arch: armv7
           distro: ubuntu22.04
@@ -240,7 +243,7 @@ jobs:
             ./build/linux-armv7/OpenMarketClient --help || true
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6.0.0
         with:
           name: OpenMarketClient-linux-armv7
           path: build/linux-armv7/OpenMarketClient
@@ -256,7 +259,7 @@ jobs:
       contents: write
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7.0.0
         with:
           path: dist
 
@@ -273,7 +276,7 @@ jobs:
           ls -lh release/
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.3
         with:
           files: release/*
           generate_release_notes: true
