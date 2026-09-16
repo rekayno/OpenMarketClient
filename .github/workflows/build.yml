@@ -77,7 +77,10 @@ jobs:
           <Project>
             <!-- Generated on-the-fly by CI (.github/workflows/build.yml). -->
             <PropertyGroup>
-              <VcpkgRoot Condition="'$(VcpkgRoot)' == '' and '$(VCPKG_ROOT)' != ''">$(VCPKG_ROOT)\</VcpkgRoot>
+              <!-- NB: unconditional trailing slash. $(VcpkgRoot) from env has none,
+                   and the MSBuild import concatenates it as $(VcpkgRoot)scripts\...
+                   without a separator check -> silent skip -> C1083. -->
+              <VcpkgRoot Condition="'$(VCPKG_ROOT)' != ''">$(VCPKG_ROOT)\</VcpkgRoot>
               <VcpkgEnabled Condition="'$(VcpkgEnabled)' == ''">true</VcpkgEnabled>
               <VcpkgEnableManifest Condition="'$(VcpkgEnableManifest)' == ''">true</VcpkgEnableManifest>
               <VcpkgTriplet Condition="'$(VcpkgTriplet)' == ''">x64-windows-static</VcpkgTriplet>
