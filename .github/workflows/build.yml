@@ -24,6 +24,9 @@ jobs:
     env:
       VCPKG_DEFAULT_TRIPLET: x64-windows-static
       VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+      # run-vcpkg bootstraps vcpkg here; MSBuild locates vcpkg.props/targets via this.
+      # Without it the vcpkg import is silently skipped -> no includes -> C1083.
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
     steps:
       - name: Checkout (full history, needed for on-the-fly PR merge)
         uses: actions/checkout@v6.1.0
@@ -67,6 +70,21 @@ jobs:
           # MSBuild manifest lookup expects vcpkg.json next to the .vcxproj,
           # so drop an identical copy into vsproject/ as well.
           cp vcpkg.json vsproject/vcpkg.json
+          # Directory.Build.props is auto-imported by every MSBuild project.
+          # It pins the vcpkg integration to the run-vcpkg checkout so the
+          # include/lib wiring cannot silently disappear.
+          cat > Directory.Build.props <<'EOF'
+          <Project>
+            <!-- Generated on-the-fly by CI (.github/workflows/build.yml). -->
+            <PropertyGroup>
+              <VcpkgRoot Condition="'$(VcpkgRoot)' == '' and '$(VCPKG_ROOT)' != ''">$(VCPKG_ROOT)\</VcpkgRoot>
+              <VcpkgEnabled Condition="'$(VcpkgEnabled)' == ''">true</VcpkgEnabled>
+              <VcpkgEnableManifest Condition="'$(VcpkgEnableManifest)' == ''">true</VcpkgEnableManifest>
+              <VcpkgTriplet Condition="'$(VcpkgTriplet)' == ''">x64-windows-static</VcpkgTriplet>
+            </PropertyGroup>
+          </Project>
+          EOF
+          cat Directory.Build.props
 
       - name: Setup vcpkg (restore deps from generated vcpkg.json)
         uses: lukka/run-vcpkg@v11.6
@@ -98,6 +116,17 @@ jobs:
               assert old in s, "Precompiled.h pattern not found, update CI patch"
               p.write_text(s.replace(old, new), encoding="utf-8")
               print("Precompiled.h patched")
+
+      - name: Diagnose vcpkg wiring (fast, pinpoints silent-skips)
+        shell: pwsh
+        run: |
+          "VCPKG_ROOT=$env:VCPKG_ROOT"
+          "VCPKG_INSTALLATION_ROOT=$env:VCPKG_INSTALLATION_ROOT"
+          Test-Path vcpkg.json
+          Test-Path vsproject/vcpkg.json
+          Test-Path Directory.Build.props
+          Test-Path "$env:VCPKG_ROOT/vcpkg.exe"
+          & "$env:VCPKG_ROOT/vcpkg.exe" version
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v3.0.0
