@@ -109,40 +109,24 @@ jobs:
           Test-Path vsproject\vcpkg_installed\x64-windows-static\include\curl\curl.h
           Test-Path vsproject\vcpkg_installed\x64-windows-static\include\rapidjson\document.h
 
-      - name: Backfill IDE/WIN/user_settings.h if options.h is missing
-        shell: pwsh
-        run: |
-          $opt = 'vsproject\vcpkg_installed\x64-windows-static\include\wolfssl\options.h'
-          if (-not (Test-Path $opt)) {
-            $src = Get-ChildItem "$env:VCPKG_ROOT\buildtrees\wolfssl" -Recurse -Filter user_settings.h |
-              Where-Object { $_.FullName -match 'IDE.WIN' } | Select-Object -First 1
-            if (-not $src) { throw 'options.h missing and no IDE/WIN/user_settings.h in buildtrees' }
-            $dstDir = 'vsproject\vcpkg_installed\x64-windows-static\include\IDE\WIN'
-            New-Item -ItemType Directory -Force -Path $dstDir | Out-Null
-            Copy-Item $src.FullName "$dstDir\user_settings.h"
-            'backfilled IDE/WIN/user_settings.h from: ' + $src.FullName
-          } else { 'options.h present, no backfill needed' }
-
-      - name: Patch src/Precompiled.h on-the-fly (vcpkg wolfssl uses options.h)
+      - name: Patch src/Precompiled.h on-the-fly (use vcpkg options.h directly)
         shell: python
         run: |
           import pathlib
           p = pathlib.Path("src/Precompiled.h")
           s = p.read_text(encoding="utf-8")
-          if "wolfssl/options.h" in s and "__has_include" in s:
+          if "patched on-the-fly by CI" in s:
               print("Precompiled.h already patched, skipping")
           else:
+              # NOTE: unconditional on purpose. In CI the vcpkg tree always
+              # provides wolfssl/options.h (proven by the listing step above),
+              # while local VS builds keep the pristine IDE/WIN/user_settings.h
+              # path untouched. No __has_include detection: it only adds a
+              # failure mode (false negative -> misleading C1083 below).
               old = "#define WOLFSSL_LIB\n#include <IDE/WIN/user_settings.h>\n#undef WOLFSSL_LIB"
               new = ("// wolfSSL config (patched on-the-fly by CI):\n"
-                     "// - classic local build (../../libs/wolfssl): uses IDE/WIN/user_settings.h\n"
-                     "// - vcpkg / CMake build (CI): provides wolfssl/options.h\n"
-                     "#if defined(__has_include) && __has_include(<wolfssl/options.h>)\n"
-                     "#include <wolfssl/options.h>\n"
-                     "#else\n"
-                     "#define WOLFSSL_LIB\n"
-                     "#include <IDE/WIN/user_settings.h>\n"
-                     "#undef WOLFSSL_LIB\n"
-                     "#endif")
+                     "// vcpkg/CMake builds provide wolfssl/options.h, use it.\n"
+                     "#include <wolfssl/options.h>")
               assert old in s, "Precompiled.h pattern not found, update CI patch"
               p.write_text(s.replace(old, new), encoding="utf-8")
               print("Precompiled.h patched")
