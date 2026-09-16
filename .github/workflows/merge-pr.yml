@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout target branch (full history)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.1.0
         with:
           ref: ${{ inputs.target }}
           fetch-depth: 0
