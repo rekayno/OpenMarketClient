@@ -93,6 +93,33 @@ jobs:
           # Pinned vcpkg commit, must match builtin-baseline in generated vcpkg.json.
           vcpkgGitCommitId: '1577f17ee57f42a0ef6d75bbb82cb37d0b76d7e8'
 
+      - name: vcpkg install (explicit, no silent-skips)
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_ROOT\vcpkg.exe" install --x-manifest-root=vsproject --x-install-root=vsproject\vcpkg_installed --triplet x64-windows-static
+
+      - name: List installed headers (ground truth for patch logic)
+        shell: pwsh
+        run: |
+          Get-ChildItem vsproject\vcpkg_installed\x64-windows-static\include\wolfssl | Select-Object Name
+          Test-Path vsproject\vcpkg_installed\x64-windows-static\include\wolfssl\options.h
+          Test-Path vsproject\vcpkg_installed\x64-windows-static\include\curl\curl.h
+          Test-Path vsproject\vcpkg_installed\x64-windows-static\include\rapidjson\document.h
+
+      - name: Backfill IDE/WIN/user_settings.h if options.h is missing
+        shell: pwsh
+        run: |
+          $opt = 'vsproject\vcpkg_installed\x64-windows-static\include\wolfssl\options.h'
+          if (-not (Test-Path $opt)) {
+            $src = Get-ChildItem "$env:VCPKG_ROOT\buildtrees\wolfssl" -Recurse -Filter user_settings.h |
+              Where-Object { $_.FullName -match 'IDE.WIN' } | Select-Object -First 1
+            if (-not $src) { throw 'options.h missing and no IDE/WIN/user_settings.h in buildtrees' }
+            $dstDir = 'vsproject\vcpkg_installed\x64-windows-static\include\IDE\WIN'
+            New-Item -ItemType Directory -Force -Path $dstDir | Out-Null
+            Copy-Item $src.FullName "$dstDir\user_settings.h"
+            'backfilled IDE/WIN/user_settings.h from: ' + $src.FullName
+          } else { 'options.h present, no backfill needed' }
+
       - name: Patch src/Precompiled.h on-the-fly (vcpkg wolfssl uses options.h)
         shell: python
         run: |
