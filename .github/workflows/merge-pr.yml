@@ -1,0 +1,56 @@
+name: Merge PR
+
+# Second of the 2 CI files (the other is build.yml).
+# Persistently merges an upstream PR (default #23 from
+# soyware/OpenMarketClient) into THIS repo's master via
+# fetch + merge + push — so it works both on upstream itself
+# and on any fork, with no local `git merge` / code edits.
+# Run manually: Actions -> Merge PR -> Run workflow.
+# Build workflow (build.yml) separately applies the same PR
+# on-the-fly in the runner workspace for every build.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'Upstream PR number to merge'
+        required: true
+        default: '23'
+      upstream:
+        description: 'Upstream repo (owner/name) the PR belongs to'
+        required: true
+        default: 'soyware/OpenMarketClient'
+      target:
+        description: 'Local branch to merge into'
+        required: true
+        default: 'master'
+
+permissions:
+  contents: write
+
+jobs:
+  merge:
+    name: Merge upstream PR #${{ inputs.pr }} into ${{ inputs.target }}
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout target branch (full history)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target }}
+          fetch-depth: 0
+
+      - name: Fetch + merge upstream PR, push back
+        run: |
+          set -e
+          PR="${{ inputs.pr }}"
+          UPSTREAM="${{ inputs.upstream }}"
+          TARGET="${{ inputs.target }}"
+          git fetch "https://github.com/${UPSTREAM}.git" "pull/${PR}/head:pr-${PR}"
+          if git merge-base --is-ancestor "pr-${PR}" HEAD; then
+            echo "PR #${PR} from ${UPSTREAM} already in ${TARGET}, nothing to do"
+          else
+            git -c user.name="github-actions" -c user.email="github-actions@github.com" merge --no-ff "pr-${PR}" -m "Merge upstream PR #${PR} from ${UPSTREAM}"
+            git push origin "HEAD:${TARGET}"
+            echo "Merged and pushed."
+          fi
+          git log --oneline -3
