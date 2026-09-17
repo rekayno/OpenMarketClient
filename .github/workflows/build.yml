@@ -89,8 +89,12 @@ jobs:
                 <AdditionalLibraryDirectories>$(GITHUB_WORKSPACE)\vsproject\vcpkg_installed\x64-windows-static\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
                 <!-- System libs over-listed on purpose: unreferenced ones are
                      ignored, a missing one would be LNK2019. Project's own
-                     Ws2_32/wolfssl/libcurl come via %() below, no dupes. -->
-                <AdditionalDependencies>Wldap32.lib;Crypt32.lib;Secur32.lib;Advapi32.lib;Normaliz.lib;zlib.lib;%(AdditionalDependencies)</AdditionalDependencies>
+                     Ws2_32/wolfssl/libcurl come via %() below, no dupes.
+                     NOTE: no zlib.lib here - vcpkg static triplet names it
+                     differently AND nothing references it (curl has no zlib
+                     feature, upstream x64 doesn't link it either). A .lib
+                     that doesn't exist is fatal LNK1181, unlike unreferenced. -->
+                <AdditionalDependencies>Wldap32.lib;Crypt32.lib;Secur32.lib;Advapi32.lib;Normaliz.lib;%(AdditionalDependencies)</AdditionalDependencies>
               </Link>
             </ItemDefinitionGroup>
           </Project>
@@ -137,6 +141,8 @@ jobs:
           Test-Path vsproject\vcpkg_installed\x64-windows-static\include\wolfssl\options.h
           Test-Path vsproject\vcpkg_installed\x64-windows-static\include\curl\curl.h
           Test-Path vsproject\vcpkg_installed\x64-windows-static\include\rapidjson\document.h
+          # Lib names as installed (linker needs exact names):
+          Get-ChildItem vsproject\vcpkg_installed\x64-windows-static\lib | Select-Object Name
           # Proof the lib really contains the symbol (empty = C_FLAGS missed):
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -products * -requires Microsoft.Component.MSBuild -property installationPath -latest
           $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
