@@ -48,7 +48,7 @@ jobs:
           git log --oneline -3
           git diff HEAD~1 --stat || true
 
-      - name: Generate vcpkg.json on-the-fly (not committed)
+      - name: Generate vcpkg.json + MSBuild wiring on-the-fly (not committed)
         shell: bash
         run: |
           cat > vcpkg.json <<'EOF'
@@ -70,24 +70,32 @@ jobs:
           # MSBuild manifest lookup expects vcpkg.json next to the .vcxproj,
           # so drop an identical copy into vsproject/ as well.
           cp vcpkg.json vsproject/vcpkg.json
-          # Directory.Build.props is auto-imported by every MSBuild project.
-          # It pins the vcpkg integration to the run-vcpkg checkout so the
-          # include/lib wiring cannot silently disappear.
-          cat > Directory.Build.props <<'EOF'
+          # Directory.Build.targets is auto-imported AFTER every project, so it
+          # can override item metadata (plain /p: cannot - those are properties).
+          # vcpkg MSBuild integration stays disabled; wire the installed tree here.
+          # No shell quoting involved at all (this dodges pwsh/MSBuild ;-parsing).
+          cat > Directory.Build.targets <<'EOF'
           <Project>
             <!-- Generated on-the-fly by CI (.github/workflows/build.yml). -->
-            <PropertyGroup>
-              <!-- NB: unconditional trailing slash. $(VcpkgRoot) from env has none,
-                   and the MSBuild import concatenates it as $(VcpkgRoot)scripts\...
-                   without a separator check -> silent skip -> C1083. -->
-              <VcpkgRoot Condition="'$(VCPKG_ROOT)' != ''">$(VCPKG_ROOT)\</VcpkgRoot>
-              <VcpkgEnabled Condition="'$(VcpkgEnabled)' == ''">true</VcpkgEnabled>
-              <VcpkgEnableManifest Condition="'$(VcpkgEnableManifest)' == ''">true</VcpkgEnableManifest>
-              <VcpkgTriplet Condition="'$(VcpkgTriplet)' == ''">x64-windows-static</VcpkgTriplet>
-            </PropertyGroup>
+            <!-- NOTE: %(...) suffixes are load-bearing: they carry the Windows SDK
+                 paths injected by the toolset props. Never drop them. -->
+            <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
+              <ClCompile>
+                <AdditionalIncludeDirectories>$(GITHUB_WORKSPACE)\vsproject\vcpkg_installed\x64-windows-static\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+                <!-- vcpkg static triplet is /MT; toolset default is /MD -> LNK2038 -->
+                <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+              </ClCompile>
+              <Link>
+                <AdditionalLibraryDirectories>$(GITHUB_WORKSPACE)\vsproject\vcpkg_installed\x64-windows-static\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+                <!-- System libs over-listed on purpose: unreferenced ones are
+                     ignored, a missing one would be LNK2019. Project's own
+                     Ws2_32/wolfssl/libcurl come via %() below, no dupes. -->
+                <AdditionalDependencies>Wldap32.lib;Crypt32.lib;Secur32.lib;Advapi32.lib;Normaliz.lib;zlib.lib;%(AdditionalDependencies)</AdditionalDependencies>
+              </Link>
+            </ItemDefinitionGroup>
           </Project>
           EOF
-          cat Directory.Build.props
+          cat Directory.Build.targets
 
       - name: Setup vcpkg (restore deps from generated vcpkg.json)
         uses: lukka/run-vcpkg@v11.6
@@ -138,7 +146,7 @@ jobs:
           "VCPKG_INSTALLATION_ROOT=$env:VCPKG_INSTALLATION_ROOT"
           Test-Path vcpkg.json
           Test-Path vsproject/vcpkg.json
-          Test-Path Directory.Build.props
+          Test-Path Directory.Build.targets
           Test-Path "$env:VCPKG_ROOT/vcpkg.exe"
           & "$env:VCPKG_ROOT/vcpkg.exe" version
 
@@ -146,15 +154,10 @@ jobs:
         uses: microsoft/setup-msbuild@v3.0.0
 
       - name: Build Release|x64
-        # vcpkg MSBuild integration is dead in this setup (no includes reach CL),
-        # so wire the explicitly-installed tree directly. Replacements are safe:
-        # the project's own entries point at nonexistent ..\..\libs dirs.
-        # System libs are over-listed on purpose: unreferenced ones are ignored,
-        # a missing one would be LNK2019. Static CRT (/MT default) matches triplet.
-        # NB: quotes around ;-separated values are backtick-escaped (`") so that
-        # pwsh forwards them to native msbuild intact; bare "..." gets stripped
-        # and MSBuild then chokes on the second item (MSB1006).
-        run: msbuild OpenMarketClient.sln /p:Configuration=Release /p:Platform=x64 /p:VcpkgEnabled=false /p:AdditionalIncludeDirectories="$env:GITHUB_WORKSPACE\vsproject\vcpkg_installed\x64-windows-static\include" /p:AdditionalLibraryDirectories="$env:GITHUB_WORKSPACE\vsproject\vcpkg_installed\x64-windows-static\lib" /p:AdditionalDependencies=`"Ws2_32.lib;Wldap32.lib;Crypt32.lib;Secur32.lib;Advapi32.lib;Normaliz.lib;wolfssl.lib;libcurl.lib;zlib.lib`" /m /v:m
+        # Wiring (includes/libs/RuntimeLibrary) comes from Directory.Build.targets,
+        # NOT from /p: here: those are item metadata, global /p: can't touch them,
+        # and pwsh mangles ;-separated /p: values on the way to native msbuild.
+        run: msbuild OpenMarketClient.sln /p:Configuration=Release /p:Platform=x64 /p:VcpkgEnabled=false /m /v:m
 
       - name: Smoke test (--help)
         run: .\build\x64\Release\OpenMarketClient.exe --help
