@@ -119,7 +119,9 @@ jobs:
             'set(VCPKG_CRT_LINKAGE static)',
             'set(VCPKG_LIBRARY_LINKAGE static)',
             '# CI: code calls wc_scrypt, gated by HAVE_SCRYPT in 5.9.2.',
-            'set(VCPKG_C_FLAGS "-DHAVE_SCRYPT")'
+            '# vcpkg demands VCPKG_CXX_FLAGS whenever VCPKG_C_FLAGS is set.',
+            'set(VCPKG_C_FLAGS "-DHAVE_SCRYPT")',
+            'set(VCPKG_CXX_FLAGS "-DHAVE_SCRYPT")'
           ) | Set-Content vsproject/vcpkg-triplets/x64-windows-static.cmake
           Get-Content vsproject/vcpkg-triplets/x64-windows-static.cmake
 
