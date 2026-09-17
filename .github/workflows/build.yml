@@ -172,6 +172,32 @@ jobs:
               p.write_text(s.replace(old, new), encoding="utf-8")
               print("Precompiled.h patched")
 
+      - name: TEMP-DIAG instrument RNG/cookie window (remove after root-cause)
+        # Crash triage only: stderr markers between the silent calls in the
+        # GenerateSessionId/SetSessionCookie window. Last marker printed =
+        # crash site. stderr is unbuffered, survives the AV. CI-only patch.
+        shell: python
+        run: |
+          import pathlib
+          p = pathlib.Path("src/Steam/Misc.h")
+          s = p.read_text(encoding="utf-8")
+          assert "DBG-CI" not in s
+          subs = [
+            ("\t\tbyte rawSessionId[(sessionIdBufSz - 1) / 2];\n\n\t\tWC_RNG rng;",
+             "\t\tbyte rawSessionId[(sessionIdBufSz - 1) / 2];\n\n\t\tWC_RNG rng;\n\t\tfprintf(stderr, \"DBG-CI: before wc_InitRng\\n\");"),
+            ("\t\tif (wc_RNG_GenerateBlock(&rng, rawSessionId, sizeof(rawSessionId)))",
+             "\t\tfprintf(stderr, \"DBG-CI: before wc_RNG_GenerateBlock\\n\");\n\t\tif (wc_RNG_GenerateBlock(&rng, rawSessionId, sizeof(rawSessionId)))"),
+            ("\t\tif (Base16_Encode(rawSessionId, sizeof(rawSessionId), (byte*)out, &sessionIdSz))",
+             "\t\tfprintf(stderr, \"DBG-CI: before Base16_Encode\\n\");\n\t\tif (Base16_Encode(rawSessionId, sizeof(rawSessionId), (byte*)out, &sessionIdSz))"),
+            ("\t\tif (!SetCookie(curl, \"steamcommunity.com\", \"sessionid\", sessionId))",
+             "\t\tfprintf(stderr, \"DBG-CI: before SetCookie\\n\");\n\t\tif (!SetCookie(curl, \"steamcommunity.com\", \"sessionid\", sessionId))"),
+          ]
+          for old, new in subs:
+              assert s.count(old) == 1, "anchor not unique/found: " + repr(old[:60])
+              s = s.replace(old, new)
+          p.write_text(s, encoding="utf-8")
+          print("Misc.h instrumented")
+
       - name: Diagnose vcpkg wiring (fast, pinpoints silent-skips)
         shell: pwsh
         run: |
