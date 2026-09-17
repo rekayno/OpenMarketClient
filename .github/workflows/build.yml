@@ -105,11 +105,12 @@ jobs:
           vcpkgGitCommitId: '1577f17ee57f42a0ef6d75bbb82cb37d0b76d7e8'
 
       - name: Generate overlay triplet (wolfSSL scrypt on)
-        # vcpkg's wolfssl port has no scrypt feature, but triplet files can
-        # append arbitrary CMake options via VCPKG_CMAKE_CONFIGURE_OPTIONS.
-        # Written from scratch: stock x64-windows-static is just these 3 lines
-        # (stable for years), and this vcpkg checkout has no triplets/ dir to
-        # copy from (sparse checkout). Overlay wins over the builtin triplet.
+        # wolfSSL 5.9.2 CMake has NO scrypt option (their own "# TODO: - SCRYPT"
+        # in CMakeLists), so VCPKG_CMAKE_CONFIGURE_OPTIONS can't help. Instead
+        # pass -DHAVE_SCRYPT as a plain compiler flag: the triplet's VCPKG_C_FLAGS
+        # reach every port's C compile, enabling both the decl (pwdbased.h) and
+        # the impl (pwdbased.c) of wc_scrypt. Consumer side gets the same define
+        # from the Precompiled.h patch below.
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path vsproject/vcpkg-triplets | Out-Null
@@ -117,8 +118,8 @@ jobs:
             'set(VCPKG_TARGET_ARCHITECTURE x64)',
             'set(VCPKG_CRT_LINKAGE static)',
             'set(VCPKG_LIBRARY_LINKAGE static)',
-            '# CI: code calls wc_scrypt, so enable it (see HAVE_SCRYPT gate).',
-            'set(VCPKG_CMAKE_CONFIGURE_OPTIONS "-DWOLFSSL_SCRYPT=yes")'
+            '# CI: code calls wc_scrypt, gated by HAVE_SCRYPT in 5.9.2.',
+            'set(VCPKG_C_FLAGS "-DHAVE_SCRYPT")'
           ) | Set-Content vsproject/vcpkg-triplets/x64-windows-static.cmake
           Get-Content vsproject/vcpkg-triplets/x64-windows-static.cmake
 
@@ -134,24 +135,10 @@ jobs:
           Test-Path vsproject\vcpkg_installed\x64-windows-static\include\wolfssl\options.h
           Test-Path vsproject\vcpkg_installed\x64-windows-static\include\curl\curl.h
           Test-Path vsproject\vcpkg_installed\x64-windows-static\include\rapidjson\document.h
-          # Proof the triplet flag took effect (empty output = flag ignored):
-          Select-String -Pattern 'HAVE_SCRYPT' vsproject\vcpkg_installed\x64-windows-static\include\wolfssl\options.h
-
-      - name: Probe wolfSSL scrypt wiring in pristine sources
-        # Decisive read-only probe (no build impact). Answers: exact CMake var
-        # name for scrypt, options.h generation, impl gating in pwdbased.c.
-        shell: pwsh
-        run: |
-          $root = (Get-ChildItem "$env:VCPKG_ROOT\buildtrees\wolfssl\src\*" -Directory | Select-Object -First 1).FullName
-          "ROOT=$root"
-          '--- CMakeLists SCRYPT/PWDBASED refs ---'
-          Select-String -Pattern 'SCRYPT|PWDBASED' "$root\CMakeLists.txt" | Select-Object -First 40
-          '--- options.h template candidates ---'
-          Get-ChildItem "$root" -Recurse -Filter 'options.h*' | Select-Object FullName
-          '--- pwdbased.c gating ---'
-          Select-String -Pattern 'HAVE_SCRYPT|NO_PWDBASED|wc_scrypt' "$root\wolfcrypt\src\pwdbased.c" | Select-Object -First 30
-          '--- settings.h scrypt refs ---'
-          Select-String -Pattern 'SCRYPT' "$root\wolfssl\wolfcrypt\settings.h" | Select-Object -First 20
+          # Proof the lib really contains the symbol (empty = C_FLAGS missed):
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -products * -requires Microsoft.Component.MSBuild -property installationPath -latest
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          & $dumpbin.FullName /symbols 'vsproject\vcpkg_installed\x64-windows-static\lib\wolfssl.lib' | Select-String -Pattern 'wc_scrypt' | Select-Object -First 10
 
       - name: Patch src/Precompiled.h on-the-fly (use vcpkg options.h directly)
         shell: python
@@ -165,11 +152,14 @@ jobs:
               # NOTE: unconditional on purpose. In CI the vcpkg tree always
               # provides wolfssl/options.h (proven by the listing step above),
               # while local VS builds keep the pristine IDE/WIN/user_settings.h
-              # path untouched. No __has_include detection: it only adds a
-              # failure mode (false negative -> misleading C1083 below).
+              # path untouched.
+              # HAVE_SCRYPT: lib is built with -DHAVE_SCRYPT via triplet
+              # VCPKG_C_FLAGS (5.9.2 CMake has no scrypt option); mirror the
+              # same define here so decl (pwdbased.h) matches the lib symbol.
               old = "#define WOLFSSL_LIB\n#include <IDE/WIN/user_settings.h>\n#undef WOLFSSL_LIB"
               new = ("// wolfSSL config (patched on-the-fly by CI):\n"
                      "// vcpkg/CMake builds provide wolfssl/options.h, use it.\n"
+                     "#define HAVE_SCRYPT 1\n"
                      "#include <wolfssl/options.h>")
               assert old in s, "Precompiled.h pattern not found, update CI patch"
               p.write_text(s.replace(old, new), encoding="utf-8")
