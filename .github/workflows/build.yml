@@ -104,10 +104,21 @@ jobs:
           # Pinned vcpkg commit, must match builtin-baseline in generated vcpkg.json.
           vcpkgGitCommitId: '1577f17ee57f42a0ef6d75bbb82cb37d0b76d7e8'
 
+      - name: Generate overlay triplet (wolfSSL scrypt on)
+        # vcpkg's wolfssl port has no scrypt feature, but triplet files can
+        # append arbitrary CMake options via VCPKG_CMAKE_CONFIGURE_OPTIONS.
+        # Copy the pinned community triplet verbatim (no drift) + one line.
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path vsproject/vcpkg-triplets | Out-Null
+          Copy-Item "$env:VCPKG_ROOT/triplets/community/x64-windows-static.cmake" vsproject/vcpkg-triplets/x64-windows-static.cmake
+          Add-Content vsproject/vcpkg-triplets/x64-windows-static.cmake 'set(VCPKG_CMAKE_CONFIGURE_OPTIONS "-DWOLFSSL_SCRYPT=yes")'
+          Get-Content vsproject/vcpkg-triplets/x64-windows-static.cmake
+
       - name: vcpkg install (explicit, no silent-skips)
         shell: pwsh
         run: |
-          & "$env:VCPKG_ROOT\vcpkg.exe" install --x-manifest-root=vsproject --x-install-root=vsproject\vcpkg_installed --triplet x64-windows-static
+          & "$env:VCPKG_ROOT\vcpkg.exe" install --overlay-triplets=vsproject/vcpkg-triplets --x-manifest-root=vsproject --x-install-root=vsproject\vcpkg_installed --triplet x64-windows-static
 
       - name: List installed headers (ground truth for patch logic)
         shell: pwsh
@@ -116,6 +127,8 @@ jobs:
           Test-Path vsproject\vcpkg_installed\x64-windows-static\include\wolfssl\options.h
           Test-Path vsproject\vcpkg_installed\x64-windows-static\include\curl\curl.h
           Test-Path vsproject\vcpkg_installed\x64-windows-static\include\rapidjson\document.h
+          # Proof the triplet flag took effect (empty output = flag ignored):
+          Select-String -Pattern 'HAVE_SCRYPT' vsproject\vcpkg_installed\x64-windows-static\include\wolfssl\options.h
 
       - name: Patch src/Precompiled.h on-the-fly (use vcpkg options.h directly)
         shell: python
@@ -283,11 +296,37 @@ jobs:
           fi
           git log --oneline -3
 
+      - name: Setup docker credential helper (pass, pinned v0.9.9)
+        # run-on-arch-action does `docker login ghcr.io` for image caching.
+        # Stock runners have no credential helper -> token lands in plaintext
+        # + warning. GPG+pass keeps it encrypted; ephemeral key, CI-only.
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y pass gnupg jq
+          printf '%s\n' 'Key-Type: 1' 'Key-Length: 2048' 'Subkey-Type: 1' 'Subkey-Length: 2048' 'Name-Real: docker credential store' 'Name-Email: docker@localhost' 'Expire-Date: 0' '%no-protection' '%commit' > /tmp/gpg-batch
+          gpg --batch --gen-key /tmp/gpg-batch
+          FPR=$(gpg --list-keys --with-colons docker@localhost | awk -F: '$1=="fpr" {print $10; exit}')
+          pass init "$FPR"
+          HELPER_VER=v0.9.9
+          HELPER_SHA256=ae80a143101672b53c65cd5aa05028897068d39e2649adff83a520ef3218355d
+          curl -sSL -o /tmp/docker-credential-pass "https://github.com/docker/docker-credential-helpers/releases/download/${HELPER_VER}/docker-credential-pass-${HELPER_VER}.linux-amd64"
+          echo "${HELPER_SHA256}  /tmp/docker-credential-pass" | sha256sum -c -
+          sudo install -m 0755 /tmp/docker-credential-pass /usr/local/bin/docker-credential-pass
+          mkdir -p ~/.docker
+          [ -f ~/.docker/config.json ] || echo '{}' > ~/.docker/config.json
+          jq '.credsStore = "pass"' ~/.docker/config.json > /tmp/docker-config.json
+          mv /tmp/docker-config.json ~/.docker/config.json
+          cat ~/.docker/config.json
+
       - name: Build in armv7 container (QEMU)
         uses: uraimo/run-on-arch-action@v3.2.0
         with:
           arch: armv7
           distro: ubuntu22.04
+          # Login (image-layer caching) is on: the token is stored encrypted
+          # via the pass credential helper (see setup step above), so no
+          # "credentials stored unencrypted" warning.
           githubToken: ${{ github.token }}
           # Silences the "image platform (linux/arm/v7) does not match host" warning.
           dockerRunArgs: '--platform linux/arm/v7'
