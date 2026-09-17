@@ -107,12 +107,19 @@ jobs:
       - name: Generate overlay triplet (wolfSSL scrypt on)
         # vcpkg's wolfssl port has no scrypt feature, but triplet files can
         # append arbitrary CMake options via VCPKG_CMAKE_CONFIGURE_OPTIONS.
-        # Copy the pinned community triplet verbatim (no drift) + one line.
+        # Written from scratch: stock x64-windows-static is just these 3 lines
+        # (stable for years), and this vcpkg checkout has no triplets/ dir to
+        # copy from (sparse checkout). Overlay wins over the builtin triplet.
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path vsproject/vcpkg-triplets | Out-Null
-          Copy-Item "$env:VCPKG_ROOT/triplets/community/x64-windows-static.cmake" vsproject/vcpkg-triplets/x64-windows-static.cmake
-          Add-Content vsproject/vcpkg-triplets/x64-windows-static.cmake 'set(VCPKG_CMAKE_CONFIGURE_OPTIONS "-DWOLFSSL_SCRYPT=yes")'
+          @(
+            'set(VCPKG_TARGET_ARCHITECTURE x64)',
+            'set(VCPKG_CRT_LINKAGE static)',
+            'set(VCPKG_LIBRARY_LINKAGE static)',
+            '# CI: code calls wc_scrypt, so enable it (see HAVE_SCRYPT gate).',
+            'set(VCPKG_CMAKE_CONFIGURE_OPTIONS "-DWOLFSSL_SCRYPT=yes")'
+          ) | Set-Content vsproject/vcpkg-triplets/x64-windows-static.cmake
           Get-Content vsproject/vcpkg-triplets/x64-windows-static.cmake
 
       - name: vcpkg install (explicit, no silent-skips)
