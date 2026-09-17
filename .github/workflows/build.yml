@@ -137,6 +137,22 @@ jobs:
           # Proof the triplet flag took effect (empty output = flag ignored):
           Select-String -Pattern 'HAVE_SCRYPT' vsproject\vcpkg_installed\x64-windows-static\include\wolfssl\options.h
 
+      - name: Probe wolfSSL scrypt wiring in pristine sources
+        # Decisive read-only probe (no build impact). Answers: exact CMake var
+        # name for scrypt, options.h generation, impl gating in pwdbased.c.
+        shell: pwsh
+        run: |
+          $root = (Get-ChildItem "$env:VCPKG_ROOT\buildtrees\wolfssl\src\*" -Directory | Select-Object -First 1).FullName
+          "ROOT=$root"
+          '--- CMakeLists SCRYPT/PWDBASED refs ---'
+          Select-String -Pattern 'SCRYPT|PWDBASED' "$root\CMakeLists.txt" | Select-Object -First 40
+          '--- options.h template candidates ---'
+          Get-ChildItem "$root" -Recurse -Filter 'options.h*' | Select-Object FullName
+          '--- pwdbased.c gating ---'
+          Select-String -Pattern 'HAVE_SCRYPT|NO_PWDBASED|wc_scrypt' "$root\wolfcrypt\src\pwdbased.c" | Select-Object -First 30
+          '--- settings.h scrypt refs ---'
+          Select-String -Pattern 'SCRYPT' "$root\wolfssl\wolfcrypt\settings.h" | Select-Object -First 20
+
       - name: Patch src/Precompiled.h on-the-fly (use vcpkg options.h directly)
         shell: python
         run: |
